@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if [[ -z "${staged_files}" ]]; then
+  exit 0
+fi
+
+blocked_file_pattern='(^|/)\.env($|\.|/)|(^|/)\.envrc$|(^|/).*\.pem$|(^|/).*\.p12$|(^|/).*\.pfx$|(^|/).*\.key$|(^|/)id_rsa(\.pub)?$|(^|/)credentials(\.json|\.ya?ml)?$|(^|/)secret(s)?(\.|/|$)|(^|/)terraform\.tfstate(\..+)?$'
+
+for file in ${staged_files}; do
+  if [[ "${file}" =~ ${blocked_file_pattern} ]]; then
+    echo "Blocked commit: sensitive file path detected -> ${file}"
+    echo "Move secret material out of git before committing."
+    exit 1
+  fi
+done
+
+declare -a content_patterns=(
+  'AKIA[0-9A-Z]{16}'
+  'ASIA[0-9A-Z]{16}'
+  '-----BEGIN (RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----'
+  '[Pp]assword[[:space:]]*[:=][[:space:]]*["'\''][^"'\'']{4,}["'\'']'
+  '[Ss]ecret[_-]?[Kk]ey[[:space:]]*[:=][[:space:]]*["'\''][^"'\'']{4,}["'\'']'
+  '[Aa][Pp][Ii][_-]?[Kk]ey[[:space:]]*[:=][[:space:]]*["'\''][^"'\'']{8,}["'\'']'
+  '[Tt]oken[[:space:]]*[:=][[:space:]]*["'\''][^"'\'']{8,}["'\'']'
+)
+
+for file in ${staged_files}; do
+  file_content="$(git show ":${file}" 2>/dev/null || true)"
+
+  if [[ -z "${file_content}" ]]; then
+    continue
+  fi
+
+  for pattern in "${content_patterns[@]}"; do
+    if [[ "${file_content}" =~ ${pattern} ]]; then
+      echo "Blocked commit: possible secret in staged content -> ${file}"
+      echo "Matched pattern: ${pattern}"
+      echo "Please remove or redact sensitive values before committing."
+      exit 1
+    fi
+  done
+done
+
+exit 0
