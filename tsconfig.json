@@ -13,6 +13,8 @@
     "noUnusedLocals": true,
     "preserveWatchOutput": true,
     "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "lib": ["DOM", "ES2021", "ES2020.Intl"],
     "outDir": "lib",
     "rootDir": "src",
     "strict": true,

@@ -115,6 +115,23 @@ To execute them, run:
 pytest -vv -r ap --cov jupyter_dataset
 ```
 
+#### Manual smoke test (datasets MVP)
+
+Use this quick flow to validate dataset apply and subset creation:
+
+1. Place a tabular dataset under `/opt/datasets/<dataset-name>/` (for example `sample.csv`).
+2. Create a notebook in JupyterLab with a tagged code cell:
+
+```python
+# Add cell tag: dataset-transform
+result = df[df["value"] > 0]
+```
+
+3. Open the **Datasets** sidebar in the left panel.
+4. Select dataset file + notebook, keep save mode as **Create subset (default)**, then click **Apply**.
+5. Confirm the response shows an output file under `/opt/datasets/<dataset-name>/subsets/`.
+6. Verify the original source file is unchanged and the subset contains transformed rows.
+
 #### Frontend tests
 
 This extension is using [Jest](https://jestjs.io/) for JavaScript code testing.
