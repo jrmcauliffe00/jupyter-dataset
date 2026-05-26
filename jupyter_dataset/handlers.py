@@ -1,4 +1,7 @@
 import json
+import io
+import os
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -9,12 +12,57 @@ import tornado
 from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 
-DATASET_ROOT = Path("/opt/datasets")
+DATASET_ROOT = Path(os.environ.get("JUPYTER_DATASET_ROOT", "/opt/datasets"))
 SUPPORTED_EXTENSIONS = (".csv", ".tsv", ".parquet", ".json", ".jsonl")
 DEFAULT_CELL_TAG = "dataset-transform"
 SAVE_MODE_SUBSET = "subset"
 SAVE_MODE_IN_PLACE = "in_place"
 SAVE_MODES = {SAVE_MODE_SUBSET, SAVE_MODE_IN_PLACE}
+
+
+def _noop_display(*_args: Any, **_kwargs: Any) -> None:
+    return
+
+
+def _is_transform_tag(tag: str) -> bool:
+    return "transform" in tag.lower()
+
+
+def _transformation_name(tags: list[str]) -> str | None:
+    for tag in tags:
+        prefix = "transform-name:"
+        if tag.lower().startswith(prefix):
+            name = tag[len(prefix) :].strip()
+            if name:
+                return name
+    return None
+
+
+def _tagged_transform_cells(notebook: dict[str, Any]) -> list[dict[str, Any]]:
+    tagged_cells: list[dict[str, Any]] = []
+    for index, cell in enumerate(notebook.get("cells", [])):
+        if cell.get("cell_type") != "code":
+            continue
+        raw_tags = cell.get("metadata", {}).get("tags", [])
+        tags = [tag for tag in raw_tags if isinstance(tag, str)]
+        transform_tags = [tag for tag in tags if _is_transform_tag(tag)]
+        if not transform_tags:
+            continue
+        transformation_name = _transformation_name(tags)
+        if not transformation_name:
+            continue
+        source = cell.get("source", "")
+        first_line = source.splitlines()[0].strip() if source else ""
+        tagged_cells.append(
+            {
+                "index": index,
+                "name": transformation_name,
+                "cell_tag": transform_tags[0],
+                "tags": transform_tags,
+                "preview": first_line[:120],
+            }
+        )
+    return tagged_cells
 
 
 def _resolve_path(raw_path: str, root_dir: Path) -> Path:
@@ -80,22 +128,27 @@ def _write_dataframe(path: Path, dataframe: pd.DataFrame) -> None:
     raise tornado.web.HTTPError(400, reason=f"Unsupported file extension: {suffix}")
 
 
-def _subset_output_path(source_path: Path, subset_name: str | None) -> Path:
-    subsets_dir = source_path.parent / "subsets"
-    subsets_dir.mkdir(parents=True, exist_ok=True)
+def _sanitize_dataset_name(raw_dataset_name: str | None) -> str:
+    if not raw_dataset_name:
+        return ""
+    return "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw_dataset_name
+    ).strip("_")
 
-    if subset_name:
-        safe_subset_name = "".join(
-            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in subset_name
-        ).strip("_")
-    else:
-        safe_subset_name = ""
 
-    if not safe_subset_name:
+def _subset_output_path(source_path: Path, new_dataset_name: str | None) -> Path:
+    source_dataset_dir = source_path.parent
+    source_dataset_name = source_dataset_dir.name
+
+    safe_dataset_name = _sanitize_dataset_name(new_dataset_name)
+    if not safe_dataset_name:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        safe_subset_name = f"{source_path.stem}__subset__{timestamp}"
+        safe_dataset_name = f"{source_dataset_name}__{timestamp}"
 
-    return subsets_dir / f"{safe_subset_name}{source_path.suffix.lower()}"
+    output_dataset_dir = source_dataset_dir.parent / safe_dataset_name
+    output_dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    return output_dataset_dir / source_path.name
 
 
 def _read_notebook(notebook_path: Path) -> dict[str, Any]:
@@ -172,13 +225,28 @@ class NotebookListHandler(APIHandler):
     def get(self) -> None:
         notebook_root = _notebook_root(self)
         notebooks: list[str] = []
+        notebook_entries: list[dict[str, Any]] = []
         for path in sorted(notebook_root.rglob("*.ipynb")):
             if ".ipynb_checkpoints" in path.parts:
                 continue
-            notebooks.append(path.relative_to(notebook_root).as_posix())
+            rel_path = path.relative_to(notebook_root).as_posix()
+            notebooks.append(rel_path)
+            notebook = _read_notebook(path)
+            notebook_entries.append(
+                {
+                    "path": rel_path,
+                    "transform_cells": _tagged_transform_cells(notebook),
+                }
+            )
 
         self.finish(
-            json.dumps({"notebook_root": str(notebook_root), "notebooks": notebooks})
+            json.dumps(
+                {
+                    "notebook_root": str(notebook_root),
+                    "notebooks": notebooks,
+                    "notebook_entries": notebook_entries,
+                }
+            )
         )
 
 
@@ -189,8 +257,12 @@ class ApplyDatasetHandler(APIHandler):
         dataset_file = (body.get("dataset_file") or "").strip()
         notebook_path_value = (body.get("notebook_path") or "").strip()
         cell_tag = (body.get("cell_tag") or DEFAULT_CELL_TAG).strip()
+        cell_index_raw = body.get("cell_index")
         save_mode = (body.get("save_mode") or SAVE_MODE_SUBSET).strip()
-        subset_name = (body.get("subset_name") or "").strip() or None
+        new_dataset_name = (
+            (body.get("new_dataset_name") or body.get("subset_name") or "").strip()
+            or None
+        )
 
         if not dataset_file:
             raise tornado.web.HTTPError(400, reason="dataset_file is required.")
@@ -198,6 +270,8 @@ class ApplyDatasetHandler(APIHandler):
             raise tornado.web.HTTPError(400, reason="notebook_path is required.")
         if not cell_tag:
             raise tornado.web.HTTPError(400, reason="cell_tag is required.")
+        if cell_index_raw is not None and not isinstance(cell_index_raw, int):
+            raise tornado.web.HTTPError(400, reason="cell_index must be an integer.")
         if save_mode not in SAVE_MODES:
             raise tornado.web.HTTPError(
                 400,
@@ -228,25 +302,48 @@ class ApplyDatasetHandler(APIHandler):
             )
 
         output_path = (
-            _subset_output_path(resolved_dataset_path, subset_name)
+            _subset_output_path(resolved_dataset_path, new_dataset_name)
             if save_mode == SAVE_MODE_SUBSET
             else resolved_dataset_path
         )
 
         original_df = _read_dataframe(resolved_dataset_path)
         notebook = _read_notebook(resolved_notebook_path)
-        cell_index, cell_source = _find_tagged_code_cell(notebook, cell_tag)
+        if isinstance(cell_index_raw, int):
+            cells = notebook.get("cells", [])
+            if cell_index_raw < 0 or cell_index_raw >= len(cells):
+                raise tornado.web.HTTPError(
+                    400, reason="cell_index is out of range for notebook."
+                )
+            selected_cell = cells[cell_index_raw]
+            if selected_cell.get("cell_type") != "code":
+                raise tornado.web.HTTPError(400, reason="Selected cell must be a code cell.")
+            selected_tags = selected_cell.get("metadata", {}).get("tags", [])
+            if not any(isinstance(tag, str) and _is_transform_tag(tag) for tag in selected_tags):
+                raise tornado.web.HTTPError(
+                    400, reason="Selected cell must include at least one transform tag."
+                )
+            cell_index = cell_index_raw
+            cell_source = selected_cell.get("source", "")
+            if not cell_tag:
+                cell_tag = DEFAULT_CELL_TAG
+        else:
+            cell_index, cell_source = _find_tagged_code_cell(notebook, cell_tag)
 
         execution_scope: dict[str, Any] = {
             "df": original_df.copy(),
             "pd": pd,
+            "display": _noop_display,
             "dataset_path": str(resolved_dataset_path),
             "save_mode": save_mode,
             "subset_output_path": str(output_path),
         }
 
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
         try:
-            exec(cell_source, {}, execution_scope)
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exec(cell_source, {}, execution_scope)
         except Exception as exc:
             raise tornado.web.HTTPError(
                 400,
@@ -264,6 +361,11 @@ class ApplyDatasetHandler(APIHandler):
             )
 
         _write_dataframe(output_path, result_df)
+        self.log.info(
+            "Transformation success: %s -> %s",
+            resolved_dataset_path.relative_to(DATASET_ROOT).as_posix(),
+            output_path.relative_to(DATASET_ROOT).as_posix(),
+        )
         self.finish(
             json.dumps(
                 {

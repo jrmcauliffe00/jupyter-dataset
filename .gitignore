@@ -123,3 +123,10 @@ dmypy.json
 
 # Yarn cache
 .yarn/
+.sample-datasets/
+
+# Generated transformation outputs and local UI snapshots
+*__subset__*/
+*__subset__*.csv
+* - JupyterLab.html
+* - JupyterLab_files/

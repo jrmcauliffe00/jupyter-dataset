@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import nbformat
@@ -88,7 +89,8 @@ async def test_apply_creates_subset_by_default(jp_fetch, jp_serverapp, tmp_path,
     payload = json.loads(response.body)
     assert payload["status"] == "ok"
     assert payload["dataset_file"] == "demo/sample.csv"
-    assert payload["output_file"].startswith("demo/subsets/")
+    assert re.match(r"^demo__\d{8}T\d{6}Z/sample\.csv$", payload["output_file"])
+    assert payload["output_file"].endswith("/sample.csv")
     assert payload["rows"] == 2
 
     original_df = pd.read_csv(data_file)
@@ -97,6 +99,49 @@ async def test_apply_creates_subset_by_default(jp_fetch, jp_serverapp, tmp_path,
     output_path = dataset_root / payload["output_file"]
     subset_df = pd.read_csv(output_path)
     assert subset_df["value"].tolist() == [2, 3]
+
+
+async def test_apply_uses_custom_new_dataset_name(
+    jp_fetch, jp_serverapp, tmp_path, monkeypatch
+):
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "demo"
+    dataset_dir.mkdir(parents=True)
+    data_file = dataset_dir / "sample.csv"
+    pd.DataFrame({"value": [1, 2, 3], "name": ["a", "b", "c"]}).to_csv(
+        data_file, index=False
+    )
+    monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
+
+    notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
+    notebook = nbformat.v4.new_notebook(
+        cells=[
+            nbformat.v4.new_code_cell(
+                "result = df[df['value'] >= 2]",
+                metadata={"tags": ["dataset-transform"]},
+            )
+        ]
+    )
+    nbformat.write(notebook, notebook_path)
+
+    response = await jp_fetch(
+        "jupyter-dataset",
+        "apply",
+        method="POST",
+        body=json.dumps(
+            {
+                "dataset_file": "demo/sample.csv",
+                "notebook_path": "transform.ipynb",
+                "cell_tag": "dataset-transform",
+                "save_mode": "subset",
+                "new_dataset_name": "education_subset",
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.code == 200
+    payload = json.loads(response.body)
+    assert payload["output_file"] == "education_subset/sample.csv"
 
 
 async def test_apply_fails_for_missing_tag(jp_fetch, jp_serverapp, tmp_path, monkeypatch):

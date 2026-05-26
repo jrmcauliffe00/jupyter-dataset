@@ -1,155 +1,31 @@
+[![JupyterLab](https://img.shields.io/badge/JupyterLab-4.x-F37626?logo=jupyter&logoColor=white)](https://jupyter.org/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Pandas](https://img.shields.io/badge/Pandas-2.x-150458?logo=pandas&logoColor=white)](https://pandas.pydata.org/)
+
+<p align="center">
+  <img src="./image.png" alt="jupyter-dataset screenshot" width="900" />
+</p>
+
 # jupyter-dataset
 
-[![Github Actions Status](https://github.com/your-org/jupyter-dataset/workflows/Build/badge.svg)](https://github.com/your-org/jupyter-dataset/actions/workflows/build.yml)
-A JupyterLab extension.
+JupyterLab dataset transforms with a simple sidebar flow: pick a dataset, choose a tagged notebook transform, and apply.
 
-This extension is composed of a Python package named `jupyter-dataset`
-for the server extension and a NPM package named `jupyter-dataset`
-for the frontend extension.
+## Prerequisites
 
-## Requirements
+- Python 3.10+
+- JupyterLab 4+
+- `pip` and `npm` available on your machine
 
-- JupyterLab >= 4.0.0
-
-## Install
-
-To install the extension, execute:
+## Start Up
 
 ```bash
-pip install jupyter-dataset
+./run-jupyterlab-test.sh
 ```
 
-## Uninstall
+## Optional Notebook Widget
 
-To remove the extension, execute:
-
-```bash
-pip uninstall jupyter-dataset
-```
-
-## Troubleshoot
-
-If you are seeing the frontend extension, but it is not working, check
-that the server extension is enabled:
-
-```bash
-jupyter server extension list
-```
-
-If the server extension is installed and enabled, but you are not seeing
-the frontend extension, check the frontend extension is installed:
-
-```bash
-jupyter labextension list
-```
-
-## Contributing
-
-### Development install
-
-Note: You will need NodeJS to build the extension package.
-
-The `jlpm` command is JupyterLab's pinned version of
-[yarn](https://yarnpkg.com/) that is installed with JupyterLab. You may use
-`yarn` or `npm` in lieu of `jlpm` below.
-
-```bash
-# Clone the repo to your local environment
-# Change directory to the jupyter-dataset directory
-# Install package in development mode
-pip install -e ".[test]"
-# Link your development version of the extension with JupyterLab
-jupyter labextension develop . --overwrite
-# Server extension must be manually installed in develop mode
-jupyter server extension enable jupyter_dataset
-# Rebuild extension Typescript source after making changes
-jlpm build
-```
-
-You can watch the source directory and run JupyterLab at the same time in different terminals to watch for changes in the extension's source and automatically rebuild the extension.
-
-```bash
-# Watch the source directory in one terminal, automatically rebuilding when needed
-jlpm watch
-# Run JupyterLab in another terminal
-jupyter lab
-```
-
-With the watch command running, every saved change will immediately be built locally and available in your running JupyterLab. Refresh JupyterLab to load the change in your browser (you may need to wait several seconds for the extension to be rebuilt).
-
-By default, the `jlpm build` command generates the source maps for this extension to make it easier to debug using the browser dev tools. To also generate source maps for the JupyterLab core extensions, you can run the following command:
-
-```bash
-jupyter lab build --minimize=False
-```
-
-### Development uninstall
-
-```bash
-# Server extension must be manually disabled in develop mode
-jupyter server extension disable jupyter_dataset
-pip uninstall jupyter-dataset
-```
-
-In development mode, you will also need to remove the symlink created by `jupyter labextension develop`
-command. To find its location, you can run `jupyter labextension list` to figure out where the `labextensions`
-folder is located. Then you can remove the symlink named `jupyter-dataset` within that folder.
-
-### Testing the extension
-
-#### Server tests
-
-This extension is using [Pytest](https://docs.pytest.org/) for Python code testing.
-
-Install test dependencies (needed only once):
-
-```sh
-pip install -e ".[test]"
-# Each time you install the Python package, you need to restore the front-end extension link
-jupyter labextension develop . --overwrite
-```
-
-To execute them, run:
-
-```sh
-pytest -vv -r ap --cov jupyter_dataset
-```
-
-#### Manual smoke test (datasets MVP)
-
-Use this quick flow to validate dataset apply and subset creation:
-
-1. Place a tabular dataset under `/opt/datasets/<dataset-name>/` (for example `sample.csv`).
-2. Create a notebook in JupyterLab with a tagged code cell:
+After JupyterLab starts, run this in a notebook cell:
 
 ```python
-# Add cell tag: dataset-transform
-result = df[df["value"] > 0]
+from ipywidget.example_dataset_explorer import display_dataset_explorer; display_dataset_explorer()
 ```
-
-3. Open the **Datasets** sidebar in the left panel.
-4. Select dataset file + notebook, keep save mode as **Create subset (default)**, then click **Apply**.
-5. Confirm the response shows an output file under `/opt/datasets/<dataset-name>/subsets/`.
-6. Verify the original source file is unchanged and the subset contains transformed rows.
-
-#### Frontend tests
-
-This extension is using [Jest](https://jestjs.io/) for JavaScript code testing.
-
-To execute them, execute:
-
-```sh
-jlpm
-jlpm test
-```
-
-#### Integration tests
-
-This extension uses [Playwright](https://playwright.dev/docs/intro/) for the integration tests (aka user level tests).
-More precisely, the JupyterLab helper [Galata](https://github.com/jupyterlab/jupyterlab/tree/master/galata) is used to handle testing the extension in JupyterLab.
-
-More information are provided within the [ui-tests](./ui-tests/README.md) README.
-
-### Packaging the extension
-
-See [RELEASE](RELEASE.md)
