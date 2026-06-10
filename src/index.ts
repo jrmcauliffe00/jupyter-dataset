@@ -27,57 +27,38 @@ interface IDatasetListResponse {
 interface INotebookListResponse {
   notebook_root: string;
   notebooks: string[];
-  notebook_entries?: INotebookEntry[];
-}
-
-interface ITransformCellEntry {
-  index: number;
-  name: string;
-  cell_tag: string;
-  tags: string[];
-  preview: string;
-}
-
-interface INotebookEntry {
-  path: string;
-  transform_cells: ITransformCellEntry[];
-}
-
-interface ITransformationOption {
-  key: string;
-  name: string;
-  cellTag: string;
-  notebookPath: string;
-  cellIndex: number;
-  preview: string;
 }
 
 interface IApplyResponse {
   status: string;
   dataset_file: string;
-  output_file: string;
-  save_mode: string;
-  cell_tag: string;
+  notebook_path: string;
+  dataset_name: string;
+  format: string;
   cell_index: number;
-  rows: number;
-  columns: number;
+  cell_source: string;
 }
 
 class DatasetSidebar extends Widget {
+  private static readonly TABLE_FORMAT_OPTIONS = ['pandas', 'numpy'] as const;
+  private static readonly DEFAULT_TABLE_FORMAT = 'pandas';
+
   private readonly statusNode = document.createElement('div');
   private readonly applyButton = document.createElement('button');
   private readonly refreshButton = document.createElement('button');
   private readonly tilesContainer = document.createElement('div');
-  private readonly transformSelect = document.createElement('select');
-  private readonly transformControl = document.createElement('div');
-  private readonly outputNameInput = document.createElement('input');
-  private readonly outputNameControl = document.createElement('div');
+  private readonly notebookSelect = document.createElement('select');
+  private readonly notebookControl = document.createElement('div');
+  private readonly formatSelect = document.createElement('select');
+  private readonly formatControl = document.createElement('div');
+  private readonly formatLabel = document.createElement('div');
 
   private datasets: IDatasetEntry[] = [];
-  private notebookEntries: INotebookEntry[] = [];
-  private transformations: ITransformationOption[] = [];
-  private activeFilePath = '';
-  private activeTransformationKey = '';
+  private notebooks: string[] = [];
+  private activeDatasetFilePath = '';
+  private activeDatasetName = '';
+  private activeNotebookPath = '';
+  private activeTableFormat = DatasetSidebar.DEFAULT_TABLE_FORMAT;
 
   constructor() {
     super();
@@ -91,30 +72,42 @@ class DatasetSidebar extends Widget {
     this.node.appendChild(this.tilesContainer);
     this.renderDatasetTiles();
 
-    this.transformControl.className = 'jp-DatasetsControl';
-    const transformLabel = document.createElement('label');
-    transformLabel.className = 'jp-DatasetsLabel';
-    transformLabel.textContent = 'Transformation';
-    this.transformSelect.className = 'jp-DatasetsSelect';
-    this.transformSelect.onchange = () => {
-      this.activeTransformationKey = this.transformSelect.value;
-      this.renderDatasetTiles();
+    this.notebookControl.className = 'jp-DatasetsControl';
+    const notebookLabel = document.createElement('label');
+    notebookLabel.className = 'jp-DatasetsLabel';
+    notebookLabel.textContent = 'Notebook';
+    this.notebookSelect.className = 'jp-DatasetsSelect';
+    this.notebookSelect.onchange = () => {
+      this.activeNotebookPath = this.notebookSelect.value;
       this.updateActionState();
     };
-    this.transformControl.appendChild(transformLabel);
-    this.transformControl.appendChild(this.transformSelect);
-    this.node.appendChild(this.transformControl);
+    this.notebookControl.appendChild(notebookLabel);
+    this.notebookControl.appendChild(this.notebookSelect);
+    this.node.appendChild(this.notebookControl);
 
-    this.outputNameControl.className = 'jp-DatasetsControl';
-    const outputNameLabel = document.createElement('label');
-    outputNameLabel.className = 'jp-DatasetsLabel';
-    outputNameLabel.textContent = 'New dataset name (optional)';
-    this.outputNameInput.className = 'jp-DatasetsInput';
-    this.outputNameInput.type = 'text';
-    this.outputNameInput.placeholder = 'Defaults to <source-name>__<timestamp>';
-    this.outputNameControl.appendChild(outputNameLabel);
-    this.outputNameControl.appendChild(this.outputNameInput);
-    this.node.appendChild(this.outputNameControl);
+    this.formatControl.className = 'jp-DatasetsControl';
+    const formatSelectLabel = document.createElement('label');
+    formatSelectLabel.className = 'jp-DatasetsLabel';
+    formatSelectLabel.textContent = 'Dataframe type';
+    this.formatSelect.className = 'jp-DatasetsSelect';
+    DatasetSidebar.TABLE_FORMAT_OPTIONS.forEach(format => {
+      const option = document.createElement('option');
+      option.value = format;
+      option.textContent = format;
+      option.selected = format === DatasetSidebar.DEFAULT_TABLE_FORMAT;
+      this.formatSelect.appendChild(option);
+    });
+    this.formatSelect.onchange = () => {
+      this.activeTableFormat = this.formatSelect.value;
+    };
+    this.formatControl.appendChild(formatSelectLabel);
+    this.formatControl.appendChild(this.formatSelect);
+    this.node.appendChild(this.formatControl);
+
+    this.formatLabel.className = 'jp-DatasetsHint';
+    this.formatLabel.textContent =
+      'Apply inserts a loader cell with the selected dataframe type.';
+    this.node.appendChild(this.formatLabel);
 
     const actionRow = document.createElement('div');
     actionRow.className = 'jp-DatasetsActions';
@@ -138,37 +131,27 @@ class DatasetSidebar extends Widget {
     };
   }
 
-  private isReadyToApply(datasetPath = this.activeFilePath): boolean {
-    return Boolean(datasetPath && this.getActiveTransformation());
+  private isReadyToApply(datasetPath = this.activeDatasetFilePath): boolean {
+    return Boolean(datasetPath && this.activeDatasetName && this.activeNotebookPath);
   }
 
-  private getActiveTransformation(): ITransformationOption | undefined {
-    return this.transformations.find(
-      transformation => transformation.key === this.activeTransformationKey
-    );
-  }
-
-  private ensureActiveTransformationSelection(): void {
-    const hasActiveTransformation = this.transformations.some(
-      transformation => transformation.key === this.activeTransformationKey
-    );
-    if (!hasActiveTransformation) {
-      this.activeTransformationKey = this.transformations[0]?.key ?? '';
+  private ensureActiveNotebookSelection(): void {
+    if (!this.notebooks.includes(this.activeNotebookPath)) {
+      this.activeNotebookPath = this.notebooks[0] ?? '';
     }
   }
 
-  private renderTransformControl(): void {
-    this.transformSelect.replaceChildren();
-    this.transformations.forEach(transformation => {
+  private renderNotebookControl(): void {
+    this.notebookSelect.replaceChildren();
+    this.notebooks.forEach(notebookPath => {
       const option = document.createElement('option');
-      option.value = transformation.key;
-      const preview = transformation.preview ? ` - ${transformation.preview}` : '';
-      option.textContent = `${transformation.name}${preview}`;
-      option.selected = transformation.key === this.activeTransformationKey;
-      this.transformSelect.appendChild(option);
+      option.value = notebookPath;
+      option.textContent = notebookPath;
+      option.selected = notebookPath === this.activeNotebookPath;
+      this.notebookSelect.appendChild(option);
     });
 
-    this.transformSelect.disabled = this.transformations.length === 0;
+    this.notebookSelect.disabled = this.notebooks.length === 0;
   }
 
   private updateActionState(): void {
@@ -182,10 +165,11 @@ class DatasetSidebar extends Widget {
     this.tilesContainer.replaceChildren();
 
     const hasActiveFile = this.datasets.some(dataset =>
-      dataset.files.some(file => file.path === this.activeFilePath)
+      dataset.files.some(file => file.path === this.activeDatasetFilePath)
     );
     if (!hasActiveFile) {
-      this.activeFilePath = '';
+      this.activeDatasetFilePath = '';
+      this.activeDatasetName = '';
     }
 
     if (this.datasets.length === 0) {
@@ -208,7 +192,7 @@ class DatasetSidebar extends Widget {
       filesContainer.className = 'jp-DatasetsFileButtons';
       const hasFiles = dataset.files.length > 0;
       const isActiveDataset =
-        hasFiles && dataset.files.some(file => file.path === this.activeFilePath);
+        hasFiles && dataset.files.some(file => file.path === this.activeDatasetFilePath);
       let selectedFilePath = '';
 
       if (isActiveDataset) {
@@ -217,10 +201,11 @@ class DatasetSidebar extends Widget {
 
       if (hasFiles) {
         selectedFilePath =
-          dataset.files.find(file => file.path === this.activeFilePath)?.path ?? '';
+          dataset.files.find(file => file.path === this.activeDatasetFilePath)?.path ?? '';
         tile.onclick = () => {
           if (!isActiveDataset) {
-            this.activeFilePath = dataset.files[0].path;
+            this.activeDatasetFilePath = dataset.files[0].path;
+            this.activeDatasetName = dataset.name;
             this.renderDatasetTiles();
             this.updateActionState();
           }
@@ -235,7 +220,8 @@ class DatasetSidebar extends Widget {
           fileButton.textContent = file.path;
           fileButton.onclick = event => {
             event.stopPropagation();
-            this.activeFilePath = file.path;
+            this.activeDatasetFilePath = file.path;
+            this.activeDatasetName = dataset.name;
             this.renderDatasetTiles();
             this.updateActionState();
           };
@@ -265,25 +251,13 @@ class DatasetSidebar extends Widget {
         requestAPI<INotebookListResponse>('notebooks')
       ]);
       this.datasets = datasetResponse.datasets;
-      this.notebookEntries =
-        notebookResponse.notebook_entries ??
-        notebookResponse.notebooks.map(path => ({ path, transform_cells: [] }));
-      this.transformations = this.notebookEntries.flatMap(notebook =>
-        notebook.transform_cells.map(cell => ({
-          key: `${notebook.path}:${cell.index}`,
-          name: cell.name,
-          cellTag: cell.cell_tag,
-          notebookPath: notebook.path,
-          cellIndex: cell.index,
-          preview: cell.preview
-        }))
-      );
-      this.ensureActiveTransformationSelection();
-      this.renderTransformControl();
+      this.notebooks = notebookResponse.notebooks;
+      this.ensureActiveNotebookSelection();
+      this.renderNotebookControl();
       this.renderDatasetTiles();
       this.updateActionState();
       this.setStatus(
-        `Loaded ${this.datasets.length} dataset(s) and ${this.transformations.length} transformation(s).`,
+        `Loaded ${this.datasets.length} dataset(s) and ${this.notebooks.length} notebook(s).`,
         'success'
       );
     } catch (error) {
@@ -297,44 +271,44 @@ class DatasetSidebar extends Widget {
   }
 
   private async apply(): Promise<void> {
-    const datasetFile = this.activeFilePath;
-    const selectedTransformation = this.getActiveTransformation();
-    const saveMode = 'subset';
-    const newDatasetName = this.outputNameInput.value.trim() || undefined;
+    const datasetFile = this.activeDatasetFilePath;
+    const datasetName = this.activeDatasetName;
+    const notebookPath = this.activeNotebookPath;
 
     if (!datasetFile) {
       this.setStatus('Select a dataset file before applying.', 'error');
       return;
     }
-    if (!selectedTransformation) {
-      this.setStatus('Select a transformation before applying.', 'error');
+    if (!datasetName) {
+      this.setStatus('Select a dataset before applying.', 'error');
+      return;
+    }
+    if (!notebookPath) {
+      this.setStatus('Select a notebook before applying.', 'error');
       return;
     }
 
     this.applyButton.disabled = true;
     this.applyButton.classList.add('jp-DatasetsApplyButton-disabled');
     this.applyButton.classList.remove('jp-DatasetsApplyButton-ready');
-    this.setStatus('Applying tagged notebook cell...', 'info');
+    this.setStatus('Adding dataset loader cell to notebook...', 'info');
     try {
       const response = await requestAPI<IApplyResponse>('apply', {
         method: 'POST',
         body: JSON.stringify({
           dataset_file: datasetFile,
-          notebook_path: selectedTransformation.notebookPath,
-          cell_tag: selectedTransformation.cellTag,
-          cell_index: selectedTransformation.cellIndex,
-          save_mode: saveMode,
-          new_dataset_name: newDatasetName
+          dataset_name: datasetName,
+          notebook_path: notebookPath,
+          format: this.activeTableFormat
         }),
         headers: {
           'Content-Type': 'application/json'
         }
       });
       this.setStatus(
-        `Applied "${selectedTransformation.name}" to ${response.dataset_file}. Output: ${response.output_file}`,
+        `Added loader cell (#${response.cell_index}) for "${response.dataset_name}" in ${response.notebook_path}.`,
         'success'
       );
-      await this.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Apply failed.';
       this.setStatus(message, 'error');

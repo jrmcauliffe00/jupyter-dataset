@@ -8,7 +8,17 @@
 
 # jupyter-dataset
 
-JupyterLab dataset transforms with a simple sidebar flow: pick a dataset, choose a tagged notebook transform, and apply.
+JupyterLab dataset loading helper with a simple sidebar flow: pick a dataset, choose a notebook, and apply.
+
+Apply appends a code cell to the selected notebook:
+
+```python
+from notebooks_data import Dataset
+
+loaded_dataset = Dataset.get("<dataset-name>").read_table(format="pandas")
+```
+
+Supported loader formats in the sidebar: `pandas` (default), `numpy`.
 
 ## Prerequisites
 

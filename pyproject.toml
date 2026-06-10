@@ -47,6 +47,9 @@ fields = ["description", "authors", "urls"]
 artifacts = ["jupyter_dataset/labextension"]
 exclude = [".github", "binder"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["jupyter_dataset", "notebooks_data"]
+
 [tool.hatch.build.targets.wheel.shared-data]
 "jupyter_dataset/labextension" = "share/jupyter/labextensions/jupyter-dataset"
 "install.json" = "share/jupyter/labextensions/jupyter-dataset/install.json"

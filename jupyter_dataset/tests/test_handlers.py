@@ -1,9 +1,7 @@
 import json
-import re
 from pathlib import Path
 
 import nbformat
-import pandas as pd
 from jupyter_dataset import handlers
 
 
@@ -48,27 +46,19 @@ async def test_list_datasets_and_notebooks(jp_fetch, jp_serverapp, tmp_path, mon
     assert datasets_payload["datasets"][0]["files"][0]["path"] == "demo/sample.csv"
 
     assert "transform.ipynb" in notebooks_payload["notebooks"]
+    assert "notebook_entries" not in notebooks_payload
 
 
-async def test_apply_creates_subset_by_default(jp_fetch, jp_serverapp, tmp_path, monkeypatch):
+async def test_apply_appends_loader_cell(jp_fetch, jp_serverapp, tmp_path, monkeypatch):
     dataset_root = tmp_path / "datasets"
     dataset_dir = dataset_root / "demo"
     dataset_dir.mkdir(parents=True)
     data_file = dataset_dir / "sample.csv"
-    pd.DataFrame({"value": [1, 2, 3], "name": ["a", "b", "c"]}).to_csv(
-        data_file, index=False
-    )
+    data_file.write_text("value,name\n1,a\n2,b\n", encoding="utf-8")
     monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
 
     notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
-    notebook = nbformat.v4.new_notebook(
-        cells=[
-            nbformat.v4.new_code_cell(
-                "result = df[df['value'] >= 2]",
-                metadata={"tags": ["dataset-transform"]},
-            )
-        ]
-    )
+    notebook = nbformat.v4.new_notebook(cells=[nbformat.v4.new_markdown_cell("start")])
     nbformat.write(notebook, notebook_path)
 
     response = await jp_fetch(
@@ -79,8 +69,8 @@ async def test_apply_creates_subset_by_default(jp_fetch, jp_serverapp, tmp_path,
             {
                 "dataset_file": "demo/sample.csv",
                 "notebook_path": "transform.ipynb",
-                "cell_tag": "dataset-transform",
-                "save_mode": "subset",
+                "dataset_name": "demo",
+                "format": "pandas",
             }
         ),
         headers={"Content-Type": "application/json"},
@@ -89,62 +79,22 @@ async def test_apply_creates_subset_by_default(jp_fetch, jp_serverapp, tmp_path,
     payload = json.loads(response.body)
     assert payload["status"] == "ok"
     assert payload["dataset_file"] == "demo/sample.csv"
-    assert re.match(r"^demo__\d{8}T\d{6}Z/sample\.csv$", payload["output_file"])
-    assert payload["output_file"].endswith("/sample.csv")
-    assert payload["rows"] == 2
+    assert payload["dataset_name"] == "demo"
+    assert payload["format"] == "pandas"
+    assert payload["notebook_path"] == "transform.ipynb"
+    assert payload["cell_index"] == 1
 
-    original_df = pd.read_csv(data_file)
-    assert len(original_df) == 3
+    updated_notebook = nbformat.read(notebook_path, as_version=4)
+    inserted_cell = updated_notebook["cells"][1]
+    assert inserted_cell["cell_type"] == "code"
+    assert "from notebooks_data import Dataset" in inserted_cell["source"]
+    assert 'loaded_dataset = Dataset.get("demo").read_table(format="pandas")' in inserted_cell["source"]
+    assert "dataset-loader" in inserted_cell.get("metadata", {}).get("tags", [])
 
-    output_path = dataset_root / payload["output_file"]
-    subset_df = pd.read_csv(output_path)
-    assert subset_df["value"].tolist() == [2, 3]
 
-
-async def test_apply_uses_custom_new_dataset_name(
+async def test_apply_infers_dataset_name_from_dataset_file(
     jp_fetch, jp_serverapp, tmp_path, monkeypatch
 ):
-    dataset_root = tmp_path / "datasets"
-    dataset_dir = dataset_root / "demo"
-    dataset_dir.mkdir(parents=True)
-    data_file = dataset_dir / "sample.csv"
-    pd.DataFrame({"value": [1, 2, 3], "name": ["a", "b", "c"]}).to_csv(
-        data_file, index=False
-    )
-    monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
-
-    notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
-    notebook = nbformat.v4.new_notebook(
-        cells=[
-            nbformat.v4.new_code_cell(
-                "result = df[df['value'] >= 2]",
-                metadata={"tags": ["dataset-transform"]},
-            )
-        ]
-    )
-    nbformat.write(notebook, notebook_path)
-
-    response = await jp_fetch(
-        "jupyter-dataset",
-        "apply",
-        method="POST",
-        body=json.dumps(
-            {
-                "dataset_file": "demo/sample.csv",
-                "notebook_path": "transform.ipynb",
-                "cell_tag": "dataset-transform",
-                "save_mode": "subset",
-                "new_dataset_name": "education_subset",
-            }
-        ),
-        headers={"Content-Type": "application/json"},
-    )
-    assert response.code == 200
-    payload = json.loads(response.body)
-    assert payload["output_file"] == "education_subset/sample.csv"
-
-
-async def test_apply_fails_for_missing_tag(jp_fetch, jp_serverapp, tmp_path, monkeypatch):
     dataset_root = tmp_path / "datasets"
     dataset_dir = dataset_root / "demo"
     dataset_dir.mkdir(parents=True)
@@ -153,9 +103,7 @@ async def test_apply_fails_for_missing_tag(jp_fetch, jp_serverapp, tmp_path, mon
     monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
 
     notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
-    notebook = nbformat.v4.new_notebook(
-        cells=[nbformat.v4.new_code_cell("result = df")]
-    )
+    notebook = nbformat.v4.new_notebook(cells=[])
     nbformat.write(notebook, notebook_path)
 
     response = await jp_fetch(
@@ -166,11 +114,82 @@ async def test_apply_fails_for_missing_tag(jp_fetch, jp_serverapp, tmp_path, mon
             {
                 "dataset_file": "demo/sample.csv",
                 "notebook_path": "transform.ipynb",
-                "cell_tag": "dataset-transform",
+                "format": "pandas",
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.code == 200
+    payload = json.loads(response.body)
+    assert payload["dataset_name"] == "demo"
+
+
+async def test_apply_supports_numpy_format(jp_fetch, jp_serverapp, tmp_path, monkeypatch):
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "demo"
+    dataset_dir.mkdir(parents=True)
+    data_file = dataset_dir / "sample.csv"
+    data_file.write_text("value\n1\n2\n", encoding="utf-8")
+    monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
+
+    notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
+    notebook = nbformat.v4.new_notebook(cells=[])
+    nbformat.write(notebook, notebook_path)
+
+    response = await jp_fetch(
+        "jupyter-dataset",
+        "apply",
+        method="POST",
+        body=json.dumps(
+            {
+                "dataset_file": "demo/sample.csv",
+                "notebook_path": "transform.ipynb",
+                "dataset_name": "demo",
+                "format": "numpy",
+            }
+        ),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.code == 200
+    payload = json.loads(response.body)
+    assert payload["format"] == "numpy"
+
+    updated_notebook = nbformat.read(notebook_path, as_version=4)
+    inserted_cell = updated_notebook["cells"][0]
+    assert (
+        'loaded_dataset = Dataset.get("demo").read_table(format="numpy")'
+        in inserted_cell["source"]
+    )
+
+
+async def test_apply_rejects_unsupported_format(
+    jp_fetch, jp_serverapp, tmp_path, monkeypatch
+):
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "demo"
+    dataset_dir.mkdir(parents=True)
+    data_file = dataset_dir / "sample.csv"
+    data_file.write_text("value\n1\n2\n", encoding="utf-8")
+    monkeypatch.setattr(handlers, "DATASET_ROOT", dataset_root)
+
+    notebook_path = Path(jp_serverapp.root_dir) / "transform.ipynb"
+    notebook = nbformat.v4.new_notebook(cells=[])
+    nbformat.write(notebook, notebook_path)
+
+    response = await jp_fetch(
+        "jupyter-dataset",
+        "apply",
+        method="POST",
+        body=json.dumps(
+            {
+                "dataset_file": "demo/sample.csv",
+                "notebook_path": "transform.ipynb",
+                "dataset_name": "demo",
+                "format": "polars",
             }
         ),
         headers={"Content-Type": "application/json"},
     )
     assert response.code == 400
     payload = json.loads(response.body)
-    assert "No code cell found" in payload["reason"]
+    assert "format must be one of:" in payload["reason"]

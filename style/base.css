@@ -122,6 +122,11 @@
   color: var(--jp-success-color1);
 }
 
+.jp-DatasetsHint {
+  font-size: 11px;
+  color: var(--jp-ui-font-color2);
+}
+
 .jp-DatasetsApplyButton-ready {
   border-color: #9ed0ae;
   color: var(--jp-ui-inverse-font-color1);
